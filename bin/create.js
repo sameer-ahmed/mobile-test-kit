@@ -41,8 +41,9 @@ function installGitHook(targetDir) {
 
   const hookScript = `#!/bin/bash
 # mobile-test-kit: run coverage check before commit
+# PRECOMMIT=1 tells the script: warn on pre-existing stubs but only block on NEW gaps.
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-bash "$ROOT/scripts/ui_test_coverage.sh" || true
+PRECOMMIT=1 bash "$ROOT/scripts/ui_test_coverage.sh"
 `;
 
   // Add to pre-commit hook (append if exists, create if not)

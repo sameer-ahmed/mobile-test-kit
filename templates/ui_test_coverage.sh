@@ -202,6 +202,28 @@ stub_exists() {
   grep -q "UI_COVERAGE_STUB:${id}" "$file" 2>/dev/null
 }
 
+# Remove a stub block when an ID is found covered — keeps files clean after agent implements it.
+remove_stub() {
+  local file="$1" id="$2"
+  [ -f "$file" ] || return
+  stub_exists "$file" "$id" || return
+  python3 - "$file" "$id" <<'PYEOF'
+import sys, re
+path, stub_id = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    content = f.read()
+# Remove the entire stub block: from the UI_COVERAGE_STUB marker line to the
+# closing separator line (─────...) that ends every stub.
+pattern = (
+    r'\n?[ \t]*// ── UI_COVERAGE_STUB:' + re.escape(stub_id) +
+    r' ──+.*?// ─{20,}[ \t]*\n'
+)
+cleaned = re.sub(pattern, '\n', content, flags=re.DOTALL)
+with open(path, 'w') as f:
+    f.write(cleaned)
+PYEOF
+}
+
 # Insert stub INSIDE the class/group body — before the last top-level closing brace.
 insert_stub() {
   local file="$1" stub="$2"
@@ -245,12 +267,20 @@ echo -e "${BOLD}Static widget keys / testIDs${NC}"
 while IFS= read -r id; do
   [ -z "$id" ] && continue
   src=$(source_file_for "$id")
-  if any_stub_exists "$id"; then
-    warn "$id  [stub present — needs implementation]  ($src)"
-    stubbed=$((stubbed+1))
-  elif echo "$REFS" | grep -qx "$id"; then
+  # Check refs FIRST — an agent may have implemented the test and left the stub
+  # comment behind. Refs win: auto-remove the stale stub so it doesn't re-trigger.
+  if echo "$REFS" | grep -qx "$id"; then
+    if any_stub_exists "$id"; then
+      # Implemented but stub comment still present — clean it up silently
+      [ -n "${TEST_FILES_ANDROID:-}" ] && remove_stub "$TEST_FILES_ANDROID" "$id"
+      [ -n "${TEST_FILES_IOS:-}"     ] && remove_stub "$TEST_FILES_IOS"     "$id"
+      [ -n "${TEST_FILE_FLUTTER:-}"  ] && remove_stub "$TEST_FILE_FLUTTER"  "$id"
+    fi
     ok "$id"
     covered=$((covered+1))
+  elif any_stub_exists "$id"; then
+    warn "$id  [stub present — needs implementation]  ($src)"
+    stubbed=$((stubbed+1))
   else
     fail "$id  — not covered, appending stubs  ($src)"
     append_stubs "$id" "$src"
@@ -264,12 +294,18 @@ echo ""
 echo -e "${BOLD}Dynamic key patterns${NC}"
 while IFS= read -r prefix; do
   [ -z "$prefix" ] && continue
-  if any_stub_exists "${prefix}*"; then
-    warn "${prefix}*  [stub present — needs implementation]"
-    stubbed=$((stubbed+1))
-  elif echo "$REFS" | grep -q "^${prefix}"; then
+  # Same ref-first logic for dynamic prefixes
+  if echo "$REFS" | grep -q "^${prefix}"; then
+    if any_stub_exists "${prefix}*"; then
+      [ -n "${TEST_FILES_ANDROID:-}" ] && remove_stub "$TEST_FILES_ANDROID" "${prefix}*"
+      [ -n "${TEST_FILES_IOS:-}"     ] && remove_stub "$TEST_FILES_IOS"     "${prefix}*"
+      [ -n "${TEST_FILE_FLUTTER:-}"  ] && remove_stub "$TEST_FILE_FLUTTER"  "${prefix}*"
+    fi
     ok "${prefix}*  (at least one instance covered)"
     covered=$((covered+1))
+  elif any_stub_exists "${prefix}*"; then
+    warn "${prefix}*  [stub present — needs implementation]"
+    stubbed=$((stubbed+1))
   else
     fail "${prefix}*  — no instance found, appending stubs"
     append_stubs "${prefix}*" "dynamic pattern"
@@ -304,6 +340,11 @@ echo    "  Covered          : $covered / $total"
 echo -e "${BOLD}═══════════════════════════════════════════════════${NC}"
 echo ""
 
+# PRECOMMIT=1 is set by the git pre-commit hook.
+# In that mode: only newly uncovered IDs (stubs just written) block the commit.
+# Pre-existing pending stubs are shown as warnings but don't block — they were
+# already there before this commit and blocking would be noise on unrelated work.
+
 if [ "$uncovered" -gt 0 ]; then
   ids_joined=$(printf '%s, ' "${uncovered_list[@]}" | sed 's/, $//')
   echo "Stubs appended to test file(s) in your project."
@@ -325,6 +366,8 @@ if [ "$stubbed" -gt 0 ]; then
   echo -e "${BOLD}║  implement all UI_COVERAGE_STUB items in test files  ║${NC}"
   echo -e "${BOLD}║                                                      ║${NC}"
   echo -e "${BOLD}╚══════════════════════════════════════════════════════╝${NC}"
+  # In pre-commit mode these stubs pre-existed — warn but don't block the commit.
+  [ "${PRECOMMIT:-0}" = "1" ] && exit 0
   exit 1
 fi
 
