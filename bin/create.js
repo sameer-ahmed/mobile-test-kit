@@ -3,50 +3,47 @@
 
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
 
 const prompts = require('prompts');
 const kleur = require('kleur');
 
 const { detectFramework } = require('../lib/detect');
 const { mergeSettings } = require('../lib/merge-settings');
-const { copyScript, copyRoboScript, copyTestSkeletons, readFastlaneHelpers } = require('../lib/copy-files');
+const { copyScript, copyRoboScript, copyTestSkeletons } = require('../lib/copy-files');
+const { setupGCP } = require('../lib/setup-gcp');
+const { patchAndroid } = require('../lib/patch-android');
+const { patchIOS } = require('../lib/patch-ios');
+const { patchFastlane } = require('../lib/patch-fastlane');
 
 const targetDir = process.cwd();
+const PKG = require('../package.json');
 
-function header() {
-  console.log('');
-  console.log(kleur.bold().cyan('  ┌─────────────────────────────────────────┐'));
-  console.log(kleur.bold().cyan('  │  mobile-test-kit  v' + require('../package.json').version + '                  │'));
-  console.log(kleur.bold().cyan('  │  Firebase Test Lab · Device Routing     │'));
-  console.log(kleur.bold().cyan('  │  Coverage Drift Detection               │'));
-  console.log(kleur.bold().cyan('  └─────────────────────────────────────────┘'));
-  console.log('');
-}
-
-function ok(msg) { console.log(kleur.green('  ✓ ') + msg); }
-function warn(msg) { console.log(kleur.yellow('  ⚠ ') + msg); }
-function info(msg) { console.log(kleur.cyan('  → ') + msg); }
+// ── Output helpers ─────────────────────────────────────────────────────────────
+function ok(msg)      { console.log(kleur.green('  ✓ ') + msg); }
+function warn(msg)    { console.log(kleur.yellow('  ⚠ ') + msg); }
+function info(msg)    { console.log(kleur.cyan('  → ') + msg); }
 function section(msg) {
   console.log('');
   console.log(kleur.bold().white('  ' + msg));
   console.log(kleur.dim('  ' + '─'.repeat(msg.length)));
 }
 
+function header() {
+  console.log('');
+  console.log(kleur.bold().cyan('  ┌─────────────────────────────────────────┐'));
+  console.log(kleur.bold().cyan('  │  mobile-test-kit  v' + PKG.version + '                 │'));
+  console.log(kleur.bold().cyan('  │  Firebase Test Lab · Device Routing     │'));
+  console.log(kleur.bold().cyan('  │  Coverage Drift Detection               │'));
+  console.log(kleur.bold().cyan('  └─────────────────────────────────────────┘'));
+  console.log('');
+}
+
+// ── Git pre-commit hook installer ─────────────────────────────────────────────
 function installGitHook(targetDir) {
   const hookDir = path.join(targetDir, '.git', 'hooks');
   if (!fs.existsSync(hookDir)) return false;
-  const hookPath = path.join(hookDir, 'post-checkout');
   const preCommitPath = path.join(hookDir, 'pre-commit');
-
-  const hookScript = `#!/bin/bash
-# mobile-test-kit: run coverage check before commit
-# PRECOMMIT=1 tells the script: warn on pre-existing stubs but only block on NEW gaps.
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-PRECOMMIT=1 bash "$ROOT/scripts/ui_test_coverage.sh"
-`;
-
-  // Add to pre-commit hook (append if exists, create if not)
+  const hookScript = `#!/bin/bash\n# mobile-test-kit: run coverage check before commit\nPRECOMMIT=1 bash "$(git rev-parse --show-toplevel)/scripts/ui_test_coverage.sh"\n`;
   if (fs.existsSync(preCommitPath)) {
     const existing = fs.readFileSync(preCommitPath, 'utf8');
     if (!existing.includes('ui_test_coverage')) {
@@ -54,13 +51,22 @@ PRECOMMIT=1 bash "$ROOT/scripts/ui_test_coverage.sh"
       return 'appended';
     }
     return 'exists';
-  } else {
-    fs.writeFileSync(preCommitPath, `#!/bin/bash\n${hookScript}`);
-    fs.chmodSync(preCommitPath, 0o755);
-    return 'created';
+  }
+  fs.writeFileSync(preCommitPath, `#!/bin/bash\n${hookScript}`);
+  fs.chmodSync(preCommitPath, 0o755);
+  return 'created';
+}
+
+// ── Gitignore helper ──────────────────────────────────────────────────────────
+function ensureGitignored(targetDir, entry) {
+  const p = path.join(targetDir, '.gitignore');
+  const content = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+  if (!content.includes(entry)) {
+    fs.appendFileSync(p, '\n' + entry + '\n');
   }
 }
 
+// ── Main ──────────────────────────────────────────────────────────────────────
 async function run() {
   header();
 
@@ -68,24 +74,19 @@ async function run() {
 
   if (framework === 'unknown') {
     console.log(kleur.red('  ✗ Could not detect framework.'));
-    console.log('');
-    console.log('    Expected either:');
-    console.log('      React Native  — package.json with react-native + App/ directory');
-    console.log('      Flutter       — pubspec.yaml + lib/ directory');
-    console.log('');
+    console.log('    Expected: React Native (package.json + App/) or Flutter (pubspec.yaml + lib/)');
     process.exit(1);
   }
 
-  console.log(kleur.bold('  Detected framework: ') + kleur.cyan(framework === 'react-native' ? 'React Native' : 'Flutter'));
-  console.log(kleur.dim('  Target: ') + targetDir);
+  console.log(kleur.bold('  Detected: ') + kleur.cyan(framework === 'react-native' ? 'React Native' : 'Flutter'));
+  console.log(kleur.dim('  Target:   ') + targetDir);
   console.log('');
 
   const answers = await prompts([
     {
       type: 'text',
       name: 'ftlProject',
-      message: 'Firebase Test Lab project ID?',
-      initial: '',
+      message: 'Firebase project ID?',
       validate: v => v.trim().length > 0 ? true : 'Required'
     },
     {
@@ -98,142 +99,149 @@ async function run() {
     {
       type: framework === 'react-native' ? 'text' : null,
       name: 'androidPackage',
-      message: 'Android package name? (e.g. com.mycompany.myapp)',
+      message: 'Android package name? (e.g. com.acme.myapp)',
       initial: 'com.mycompany.' + path.basename(targetDir).toLowerCase().replace(/[^a-z0-9]/g, ''),
-      validate: v => /^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$/.test(v.trim()) ? true : 'Must be a valid package name, e.g. com.acme.myapp'
+      validate: v => /^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$/.test(v.trim()) ? true : 'e.g. com.acme.myapp'
     },
     {
       type: framework === 'flutter' ? 'text' : null,
       name: 'flutterPackage',
       message: 'Flutter package name? (from pubspec.yaml → name:)',
       initial: path.basename(targetDir).toLowerCase().replace(/[^a-z0-9_]/g, '_'),
-      validate: v => /^[a-z][a-z0-9_]*$/.test(v.trim()) ? true : 'Must be a valid Dart package name (lowercase, underscores)'
+      validate: v => /^[a-z][a-z0-9_]*$/.test(v.trim()) ? true : 'Lowercase + underscores only'
+    },
+    {
+      type: 'text',
+      name: 'testPhone',
+      message: 'Test phone number for login automation? (leave blank to set later)',
+      initial: ''
+    },
+    {
+      type: 'text',
+      name: 'testOtp',
+      message: 'Test OTP? (leave blank to set later)',
+      initial: ''
     },
     {
       type: 'select',
       name: 'hookType',
-      message: 'How should coverage checks be triggered automatically?',
+      message: 'Coverage check trigger?',
       choices: [
-        {
-          title: 'Claude Code hook  (PostToolUse — fires on every file edit)',
-          description: 'Best if your team uses Claude Code',
-          value: 'claude'
-        },
-        {
-          title: 'Git pre-commit hook  (fires before every commit)',
-          description: 'Works with any editor — Cursor, Copilot, Windsurf, VS Code',
-          value: 'git'
-        },
-        {
-          title: 'Both',
-          description: 'Claude Code for real-time + git pre-commit as safety net',
-          value: 'both'
-        },
-        {
-          title: 'Manual only  (I\'ll run bash scripts/ui_test_coverage.sh myself)',
-          value: 'none'
-        }
+        { title: 'Claude Code + git pre-commit  (recommended)', value: 'both' },
+        { title: 'Claude Code only', value: 'claude' },
+        { title: 'Git pre-commit only  (any editor)', value: 'git' },
+        { title: 'Manual', value: 'none' }
       ],
       initial: 0
     },
     {
       type: 'confirm',
+      name: 'runGCP',
+      message: 'Run GCP setup now? (enables APIs, creates bucket, sets IAM — requires gcloud auth)',
+      initial: true
+    },
+    {
+      type: 'confirm',
       name: 'createSkeletons',
-      message: 'Create starter test files? (empty class + helpers — stubs auto-fill as you add testIDs)',
+      message: 'Create starter test files?',
       initial: true
     }
   ], { onCancel: () => process.exit(0) });
 
-  const { ftlProject, ftlBucket, androidPackage, flutterPackage, hookType, createSkeletons } = answers;
+  const { ftlProject, ftlBucket, androidPackage, flutterPackage,
+          testPhone, testOtp, hookType, runGCP, createSkeletons } = answers;
 
+  // ── GCP setup ───────────────────────────────────────────────────────────────
+  if (runGCP) {
+    section('GCP Setup');
+    setupGCP(ftlProject, ftlBucket, ok, warn, info);
+  }
+
+  // ── Android build.gradle ────────────────────────────────────────────────────
+  if (framework === 'react-native') {
+    section('Android');
+    patchAndroid(targetDir, ok, info);
+  }
+
+  // ── iOS Xcode target ────────────────────────────────────────────────────────
+  if (framework === 'react-native' && process.platform === 'darwin') {
+    section('iOS');
+    patchIOS(targetDir, androidPackage, ok, warn, info);
+  }
+
+  // ── Files ───────────────────────────────────────────────────────────────────
   section('Installing files');
 
-  // 1. Coverage script
   const scriptDest = copyScript(targetDir);
-  ok(`scripts/ui_test_coverage.sh`);
+  ok('scripts/ui_test_coverage.sh');
 
-  // 2. Robo script template (RN only)
   if (framework === 'react-native') {
     const roboDest = copyRoboScript(targetDir);
     if (roboDest) {
-      ok(`testlab/robo_script_android.json  (template — update resource IDs to match your login flow)`);
+      // Substitute test phone into robo script
+      if (testPhone) {
+        let robo = fs.readFileSync(roboDest, 'utf8');
+        robo = robo.replace('YOUR_TEST_PHONE_NUMBER', testPhone);
+        if (testOtp) robo = robo.replace('YOUR_TEST_OTP', testOtp);
+        fs.writeFileSync(roboDest, robo);
+      }
+      ok('testlab/robo_script_android.json  (update resource IDs to match your login form)');
     } else {
-      info(`testlab/robo_script_android.json already exists, skipped`);
+      info('testlab/robo_script_android.json already exists, skipped');
     }
   }
 
-  // 3. Starter test skeletons
   if (createSkeletons) {
     const installed = copyTestSkeletons(targetDir, framework, androidPackage, flutterPackage);
     for (const f of installed) {
-      if (f.skipped) {
-        info(`${f.rel}  already exists, skipped`);
-      } else {
-        ok(`${f.rel}  (empty class + helpers — stubs will fill in as you add testIDs)`);
-      }
+      if (f.skipped) info(`${f.rel}  already exists, skipped`);
+      else ok(`${f.rel}`);
     }
   }
 
-  // 4. Hooks
+  // Save test credentials to testlab/.env.test (gitignored)
+  if (testPhone || testOtp) {
+    const envPath = path.join(targetDir, 'testlab', '.env.test');
+    const testlabDir = path.join(targetDir, 'testlab');
+    if (!fs.existsSync(testlabDir)) fs.mkdirSync(testlabDir, { recursive: true });
+    const lines = [];
+    if (testPhone) lines.push(`TEST_PHONE=${testPhone}`);
+    if (testOtp)   lines.push(`TEST_OTP=${testOtp}`);
+    fs.writeFileSync(envPath, lines.join('\n') + '\n');
+    ensureGitignored(targetDir, 'testlab/.env.test');
+    ok('testlab/.env.test  (credentials saved, gitignored)');
+  }
+
+  // ── Hooks ───────────────────────────────────────────────────────────────────
   if (hookType === 'claude' || hookType === 'both') {
     const added = mergeSettings(targetDir);
-    if (added) {
-      ok(`.claude/settings.json  →  PostToolUse hook added`);
-    } else {
-      info(`.claude/settings.json  →  hook already present, skipped`);
-    }
+    if (added) ok('.claude/settings.json  →  PostToolUse hook');
+    else info('.claude/settings.json  →  hook already present, skipped');
   }
 
   if (hookType === 'git' || hookType === 'both') {
     const result = installGitHook(targetDir);
-    if (result === 'created') ok(`.git/hooks/pre-commit  →  coverage check added`);
-    else if (result === 'appended') ok(`.git/hooks/pre-commit  →  appended to existing hook`);
-    else if (result === 'exists') info(`.git/hooks/pre-commit  →  hook already present, skipped`);
-    else warn(`No .git directory found — git hook skipped. Run git init first if needed.`);
+    if (result === 'created' || result === 'appended') ok('.git/hooks/pre-commit  →  coverage check added');
+    else if (result === 'exists') info('.git/hooks/pre-commit  →  already present, skipped');
+    else warn('No .git directory — git hook skipped');
   }
 
-  // 5. Fastlane
-  section('Fastlane lanes');
-  const rb = readFastlaneHelpers(ftlProject, ftlBucket);
-  const snippetPath = path.join(targetDir, 'fastlane', 'FastFile-TestKit.rb');
-  const fastlaneDir = path.join(targetDir, 'fastlane');
-  if (!fs.existsSync(fastlaneDir)) fs.mkdirSync(fastlaneDir, { recursive: true });
-  fs.writeFileSync(snippetPath, rb);
-  ok(`fastlane/FastFile-TestKit.rb`);
-  warn(`Merge lanes from FastFile-TestKit.rb into your existing Fastfile`);
+  // ── Fastlane ────────────────────────────────────────────────────────────────
+  section('Fastlane');
+  patchFastlane(targetDir, ftlProject, ftlBucket, testPhone, testOtp, ok, info);
 
-  section('Next steps');
+  // ── Done ────────────────────────────────────────────────────────────────────
   console.log('');
-  console.log('  ' + kleur.bold('1.') + ' Enable Blaze billing on your Firebase project');
-  console.log('     ' + kleur.dim('console.firebase.google.com → ⚙️ → Upgrade → Blaze'));
+  console.log(kleur.bold().green('  ✅ Done!'));
   console.log('');
-  console.log('  ' + kleur.bold('2.') + ' Enable required APIs (run once):');
-  console.log('     ' + kleur.dim(`gcloud config set project ${ftlProject}`));
-  console.log('     ' + kleur.dim('gcloud services enable testing.googleapis.com toolresults.googleapis.com storage.googleapis.com firebase.googleapis.com'));
+  console.log(kleur.bold('  One manual step: ') + 'Enable Blaze billing');
+  console.log('  ' + kleur.dim('console.firebase.google.com → your project → ⚙️ → Upgrade → Blaze'));
   console.log('');
-  console.log('  ' + kleur.bold('3.') + ' Create the GCS results bucket:');
-  console.log('     ' + kleur.dim(`gsutil mb -l us-central1 ${ftlBucket}`));
-  console.log('     ' + kleur.dim(`PROJECT_NUMBER=$(gcloud projects describe ${ftlProject} --format="value(projectNumber)")`));
-  console.log('     ' + kleur.dim(`gsutil iam ch serviceAccount:service-\${PROJECT_NUMBER}@gcp-sa-firebase.iam.gserviceaccount.com:objectAdmin ${ftlBucket}`));
+  console.log('  Then run your first test:');
+  console.log('  ' + kleur.dim('bundle exec fastlane android testLabProd'));
+  console.log('  ' + kleur.dim('bundle exec fastlane ios testLabProd'));
   console.log('');
-
-  if (framework === 'react-native') {
-    console.log('  ' + kleur.bold('4.') + ' Add testID= to your interactive elements:');
-    console.log('     ' + kleur.dim('<TouchableOpacity testID="my-button">'));
-    console.log('     Each new testID will auto-generate a stub in your test files.');
-  } else {
-    console.log('  ' + kleur.bold('4.') + ' Add ValueKey() to your widgets:');
-    console.log('     ' + kleur.dim("ElevatedButton(key: ValueKey('my-button'), ...)"));
-    console.log('     Each new key will auto-generate a stub in your integration test.');
-  }
-  console.log('');
-  console.log('  ' + kleur.bold('5.') + ' Run your first Test Lab job:');
-  console.log('     ' + kleur.dim('bundle exec fastlane android testLabProd'));
-  console.log('     ' + kleur.dim('bundle exec fastlane ios testLabProd'));
-  console.log('');
-  console.log('  Full setup guide: ' + kleur.cyan('https://github.com/sameer-ahmed/mobile-test-kit#readme'));
-  console.log('');
-  console.log(kleur.bold().green('  Done!') + kleur.green(' Your test kit is ready. Add testIDs and the rest follows.'));
+  console.log('  Full guide: ' + kleur.cyan('https://github.com/sameer-ahmed/mobile-test-kit#readme'));
   console.log('');
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "create-mobile-test-kit",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Zero-friction mobile UI testing setup: Firebase Test Lab, physical device routing, coverage drift detection — for React Native and Flutter",
   "bin": {
     "create-mobile-test-kit": "./bin/create.js"
