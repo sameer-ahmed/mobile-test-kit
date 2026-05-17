@@ -96,6 +96,20 @@ async function run() {
       validate: v => v.startsWith('gs://') ? true : 'Must start with gs://'
     },
     {
+      type: framework === 'react-native' ? 'text' : null,
+      name: 'androidPackage',
+      message: 'Android package name? (e.g. com.mycompany.myapp)',
+      initial: 'com.mycompany.' + path.basename(targetDir).toLowerCase().replace(/[^a-z0-9]/g, ''),
+      validate: v => /^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$/.test(v.trim()) ? true : 'Must be a valid package name, e.g. com.acme.myapp'
+    },
+    {
+      type: framework === 'flutter' ? 'text' : null,
+      name: 'flutterPackage',
+      message: 'Flutter package name? (from pubspec.yaml → name:)',
+      initial: path.basename(targetDir).toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+      validate: v => /^[a-z][a-z0-9_]*$/.test(v.trim()) ? true : 'Must be a valid Dart package name (lowercase, underscores)'
+    },
+    {
       type: 'select',
       name: 'hookType',
       message: 'How should coverage checks be triggered automatically?',
@@ -130,7 +144,7 @@ async function run() {
     }
   ], { onCancel: () => process.exit(0) });
 
-  const { ftlProject, ftlBucket, hookType, createSkeletons } = answers;
+  const { ftlProject, ftlBucket, androidPackage, flutterPackage, hookType, createSkeletons } = answers;
 
   section('Installing files');
 
@@ -150,7 +164,7 @@ async function run() {
 
   // 3. Starter test skeletons
   if (createSkeletons) {
-    const installed = copyTestSkeletons(targetDir, framework);
+    const installed = copyTestSkeletons(targetDir, framework, androidPackage, flutterPackage);
     for (const f of installed) {
       if (f.skipped) {
         info(`${f.rel}  already exists, skipped`);
