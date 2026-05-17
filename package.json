@@ -1,0 +1,38 @@
+{
+  "name": "create-mobile-test-kit",
+  "version": "0.1.0",
+  "description": "Zero-friction mobile UI testing setup: Firebase Test Lab, physical device routing, coverage drift detection — for React Native and Flutter",
+  "bin": {
+    "create-mobile-test-kit": "./bin/create.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "templates"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "prompts": "^2.4.2",
+    "kleur": "^4.1.5"
+  },
+  "keywords": [
+    "react-native",
+    "flutter",
+    "firebase-test-lab",
+    "xcuitest",
+    "uiautomator",
+    "mobile-testing",
+    "fastlane",
+    "ci",
+    "create"
+  ],
+  "author": "Sameer Ahmed",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sameer-ahmed/mobile-test-kit.git"
+  },
+  "homepage": "https://github.com/sameer-ahmed/mobile-test-kit#readme"
+}

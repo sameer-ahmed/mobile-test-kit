@@ -1,0 +1,28 @@
+[
+  {
+    "eventType": "VIEW_TEXT_CHANGED",
+    "elementDescriptors": [{"resourceId": "login-phone-input"}],
+    "replacementText": "YOUR_TEST_PHONE_NUMBER"
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [{"resourceId": "login-submit-button"}]
+  },
+  {
+    "eventType": "DELAYED_MESSAGE_POSTED",
+    "delayTime": 4000
+  },
+  {
+    "eventType": "VIEW_TEXT_CHANGED",
+    "elementDescriptors": [{"resourceId": "login-otp-input"}],
+    "replacementText": "YOUR_TEST_OTP"
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [{"resourceId": "login-submit-button"}]
+  },
+  {
+    "eventType": "DELAYED_MESSAGE_POSTED",
+    "delayTime": 3000
+  }
+]
