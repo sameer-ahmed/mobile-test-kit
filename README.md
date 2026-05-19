@@ -2,15 +2,21 @@
 
 > Zero-friction mobile UI testing setup for React Native and Flutter apps.
 
-One command installs:
-- **Firebase Test Lab** integration (real hardware, no emulators)
-- **Physical device routing** (plugged-in phone takes priority automatically)
-- **Coverage drift detection** (new screens with no tests → stubs appear instantly)
-- **Fastlane lanes** for running, checking, and scheduling tests
+**One command installs everything:**
 
 ```bash
 npx create-mobile-test-kit
 ```
+
+---
+
+## What you get
+
+- **Firebase Test Lab** integration (real hardware, no emulators)
+- **Physical device routing** (plugged-in phone takes priority automatically)
+- **Coverage drift detection** (new screens with no tests → stubs appear instantly)
+- **Fastlane lanes** for running, checking, and scheduling tests
+- **Full automation** — GCP setup, build.gradle patches, Xcode targets, Fastlane merges
 
 Works with **React Native** and **Flutter**.
 
